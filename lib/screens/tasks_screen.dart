@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
@@ -17,17 +19,61 @@ class TasksScreen extends StatefulWidget {
 }
 
 class _TasksScreenState extends State<TasksScreen> {
-  /// Enquanto uma tarefa está sendo arrastada, mostramos a barra de destinos.
-  bool _dragging = false;
+  final _scroll = ScrollController();
+  final _listKey = GlobalKey();
+  final _panelKey = GlobalKey();
 
-  void _startDrag() {
-    // Um aviso na parte de baixo cobriria a barra de destinos.
+  /// Tarefa sendo arrastada (enquanto isso, mostramos o painel de destinos).
+  String? _draggingId;
+  Offset? _pointer;
+  Timer? _autoScroll;
+
+  bool get _dragging => _draggingId != null;
+
+  @override
+  void dispose() {
+    _autoScroll?.cancel();
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  void _startDrag(Task task) {
+    // Um aviso na tela poderia cobrir os destinos.
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
-    setState(() => _dragging = true);
+    _autoScroll?.cancel();
+    _autoScroll = Timer.periodic(const Duration(milliseconds: 16), (_) => _autoScrollTick());
+    setState(() => _draggingId = task.id);
   }
 
   void _endDrag() {
-    if (mounted) setState(() => _dragging = false);
+    _autoScroll?.cancel();
+    _autoScroll = null;
+    _pointer = null;
+    if (mounted && _dragging) setState(() => _draggingId = null);
+  }
+
+  /// Rola a lista sozinha quando o dedo chega perto das bordas durante o arraste.
+  void _autoScrollTick() {
+    final pointer = _pointer;
+    final list = _listKey.currentContext?.findRenderObject() as RenderBox?;
+    if (pointer == null || list == null || !_scroll.hasClients) return;
+    final top = list.localToGlobal(Offset.zero).dy;
+    final bottom = top + list.size.height;
+    final panel = _panelKey.currentContext?.findRenderObject() as RenderBox?;
+    final upperEdge = panel == null ? top : panel.localToGlobal(Offset.zero).dy + panel.size.height;
+
+    const zone = 64.0;
+    const maxSpeed = 16.0;
+    double delta = 0;
+    if (pointer.dy < upperEdge + zone) {
+      delta = -maxSpeed * ((upperEdge + zone - pointer.dy) / zone).clamp(0.0, 1.0);
+    } else if (pointer.dy > bottom - zone) {
+      delta = maxSpeed * ((pointer.dy - (bottom - zone)) / zone).clamp(0.0, 1.0);
+    }
+    if (delta == 0) return;
+    final pos = _scroll.position;
+    final next = (pos.pixels + delta).clamp(pos.minScrollExtent, pos.maxScrollExtent);
+    if (next != pos.pixels) _scroll.jumpTo(next);
   }
 
   Future<void> _toggle(Task task) async {
@@ -42,33 +88,42 @@ class _TasksScreenState extends State<TasksScreen> {
     }
   }
 
-  Future<void> _dropOnPeriod(Task task, PeriodType period) async {
-    _endDrag();
-    final state = AppScope.read(context);
-    await state.moveTo(task, period);
-    if (!mounted) return;
+  void _showSnack(String text) {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          content: Text('"${task.title}" foi para ${period.label.toLowerCase()}'),
+          content: Text(text),
           behavior: SnackBarBehavior.floating,
           duration: const Duration(seconds: 2),
         ),
       );
   }
 
+  Future<void> _dropOnPeriod(Task task, PeriodType period) async {
+    _endDrag();
+    final state = AppScope.read(context);
+    await state.moveTo(task, period);
+    await state.markDragTipSeen();
+    if (mounted) _showSnack('"${task.title}" foi para ${period.label.toLowerCase()}');
+  }
+
   Future<void> _dropOnPause(Task task) async {
     _endDrag();
-    await AppScope.read(context).pause(task);
+    final state = AppScope.read(context);
+    await state.pause(task);
+    await state.markDragTipSeen();
+    if (mounted) _showSnack('"${task.title}" está em pausa');
   }
 
   TaskCard _card(Task task, {bool overdue = false}) => TaskCard(
     key: ValueKey(task.id),
     task: task,
     overdue: overdue,
+    dimmed: task.id == _draggingId,
     onToggle: () => _toggle(task),
-    onDragStarted: _startDrag,
+    onDragStarted: () => _startDrag(task),
+    onDragUpdate: (d) => _pointer = d.globalPosition,
     onDragEnd: _endDrag,
   );
 
@@ -76,17 +131,25 @@ class _TasksScreenState extends State<TasksScreen> {
   Widget build(BuildContext context) {
     final state = AppScope.of(context);
     final overdue = state.overdueTasks;
+    final upcoming = state.upcomingTasks;
     final paused = state.pausedTasks;
+    final hasTasks = PeriodType.values.any((p) => state.currentTasks(p).isNotEmpty);
 
     return Scaffold(
       body: Stack(
         children: [
           ListView(
+            key: _listKey,
+            controller: _scroll,
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 120),
             children: [
               _Header(state: state),
               const SizedBox(height: 12),
               _StatsCard(state: state),
+              if (hasTasks && !state.dragTipSeen) ...[
+                const SizedBox(height: 12),
+                _DragTip(onClose: state.markDragTipSeen),
+              ],
               const SizedBox(height: 16),
               for (final p in PeriodType.values) ...[
                 _PeriodSection(
@@ -94,6 +157,17 @@ class _TasksScreenState extends State<TasksScreen> {
                   tasks: state.currentTasks(p),
                   cardBuilder: _card,
                   onDrop: (t) => _dropOnPeriod(t, p),
+                ),
+                const SizedBox(height: 14),
+              ],
+              if (upcoming.isNotEmpty) ...[
+                _SpecialSection(
+                  title: 'Mais pra frente',
+                  icon: Icons.event_note_rounded,
+                  color: LivocaColors.pinkDark,
+                  emptyText: '',
+                  tasks: upcoming,
+                  cardBuilder: _card,
                 ),
                 const SizedBox(height: 14),
               ],
@@ -119,17 +193,22 @@ class _TasksScreenState extends State<TasksScreen> {
               ),
             ],
           ),
-          // Barra de destinos que aparece durante o arraste, para não precisar rolar.
+          // Painel de destinos no topo durante o arraste (cobre só o cabeçalho,
+          // que não é destino). Aparece sem deslizar, para não "fugir" do dedo.
           Positioned(
             left: 0,
             right: 0,
-            bottom: 0,
+            top: 0,
             child: IgnorePointer(
               ignoring: !_dragging,
-              child: AnimatedSlide(
-                offset: _dragging ? Offset.zero : const Offset(0, 1.2),
-                duration: const Duration(milliseconds: 200),
-                child: _DropBar(onDropPeriod: _dropOnPeriod, onDropPause: _dropOnPause),
+              child: AnimatedOpacity(
+                opacity: _dragging ? 1 : 0,
+                duration: const Duration(milliseconds: 120),
+                child: _DropPanel(
+                  key: _panelKey,
+                  onDropPeriod: _dropOnPeriod,
+                  onDropPause: _dropOnPause,
+                ),
               ),
             ),
           ),
@@ -143,6 +222,42 @@ class _TasksScreenState extends State<TasksScreen> {
               icon: const Icon(Icons.add_rounded),
               label: const Text('Tarefa', style: TextStyle(fontWeight: FontWeight.w700)),
             ),
+    );
+  }
+}
+
+class _DragTip extends StatelessWidget {
+  const _DragTip({required this.onClose});
+
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 10, 4, 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: LivocaColors.pinkLight),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.drag_indicator_rounded, color: LivocaColors.pink),
+          const SizedBox(width: 10),
+          const Expanded(
+            child: Text(
+              'Dica: para mudar uma tarefa de período, arraste pelo ⠿ '
+              '(ou segure a tarefa) e solte no período que quiser.',
+              style: TextStyle(fontSize: 13, color: Colors.black87),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Fechar dica',
+            icon: const Icon(Icons.close_rounded, size: 20, color: Colors.grey),
+            onPressed: onClose,
+          ),
+        ],
+      ),
     );
   }
 }
@@ -361,8 +476,7 @@ class _PeriodSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final done = tasks.where((t) => t.isDone).length;
     return DragTarget<Task>(
-      onWillAcceptWithDetails: (d) =>
-          !(d.data.period == period && d.data.isCurrent(DateTime.now())),
+      onWillAcceptWithDetails: (d) => d.data.bucket(DateTime.now()) != period,
       onAcceptWithDetails: (d) => onDrop(d.data),
       builder: (context, candidates, _) {
         final highlight = candidates.isNotEmpty;
@@ -514,8 +628,9 @@ class _SpecialSection extends StatelessWidget {
 }
 
 /// Destinos rápidos exibidos na parte de baixo durante o arraste.
-class _DropBar extends StatelessWidget {
-  const _DropBar({required this.onDropPeriod, required this.onDropPause});
+/// Destinos rápidos exibidos no topo durante o arraste.
+class _DropPanel extends StatelessWidget {
+  const _DropPanel({super.key, required this.onDropPeriod, required this.onDropPause});
 
   final void Function(Task, PeriodType) onDropPeriod;
   final void Function(Task) onDropPause;
@@ -525,45 +640,43 @@ class _DropBar extends StatelessWidget {
     return Material(
       color: Colors.white,
       elevation: 12,
+      shadowColor: const Color(0x55C2185B),
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        borderRadius: BorderRadius.vertical(bottom: Radius.circular(24)),
       ),
-      child: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                'Solte a tarefa em um período',
-                style: TextStyle(fontWeight: FontWeight.w700, color: LivocaColors.pinkDark),
-              ),
-              const SizedBox(height: 10),
-              Wrap(
-                alignment: WrapAlignment.center,
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final p in PeriodType.values)
-                    _DropChip(
-                      label: p.shortLabel,
-                      icon: p.icon,
-                      color: LivocaColors.pink,
-                      willAccept: (t) => !(t.period == p && t.isCurrent(DateTime.now())),
-                      onAccept: (t) => onDropPeriod(t, p),
-                    ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 14),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Solte a tarefa em um período',
+              style: TextStyle(fontWeight: FontWeight.w700, color: LivocaColors.pinkDark),
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              alignment: WrapAlignment.center,
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final p in PeriodType.values)
                   _DropChip(
-                    label: 'Pausar',
-                    icon: Icons.pause_rounded,
-                    color: Colors.blueGrey,
-                    willAccept: (t) => !t.isPaused,
-                    onAccept: onDropPause,
+                    label: p.shortLabel,
+                    icon: p.icon,
+                    color: LivocaColors.pink,
+                    willAccept: (t) => t.bucket(DateTime.now()) != p,
+                    onAccept: (t) => onDropPeriod(t, p),
                   ),
-                ],
-              ),
-            ],
-          ),
+                _DropChip(
+                  label: 'Pausar',
+                  icon: Icons.pause_rounded,
+                  color: Colors.blueGrey,
+                  willAccept: (t) => !t.isPaused,
+                  onAccept: onDropPause,
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );
@@ -594,7 +707,7 @@ class _DropChip extends StatelessWidget {
         final hover = candidates.isNotEmpty;
         return AnimatedContainer(
           duration: const Duration(milliseconds: 120),
-          padding: EdgeInsets.symmetric(horizontal: hover ? 18 : 14, vertical: hover ? 14 : 10),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           decoration: BoxDecoration(
             color: hover ? color : color.withValues(alpha: 0.12),
             borderRadius: BorderRadius.circular(16),

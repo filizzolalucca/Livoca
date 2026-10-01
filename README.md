@@ -10,16 +10,27 @@ App simples de organização pessoal feito em Flutter. Tudo fica salvo no própr
 - **Resumo do dia**: na primeira vez que o app é aberto no dia, aparece um resumo com as tarefas e
   compromissos de hoje (panda pensativo) e, em seguida, as tarefas não concluídas a tempo (panda triste).
 - **Tarefas por período**: Hoje, Esta semana, Este mês, Este trimestre, Este semestre e Este ano.
+- **Tarefas e agenda unificadas**: tarefas e compromissos são a mesma coisa.
+  - Tarefa **sem dia marcado** aparece na agenda **ocupando o período todo** (faixa embaixo dos dias).
+  - Item com **dia específico** (e horário opcional) aparece naquele dia na agenda e também na lista de
+    tarefas, na menor fileira que contém o dia (ex.: sexta desta semana → "Esta semana"; no dia → "Hoje").
+  - O que for criado na agenda também vira tarefa, a menos que se desligue **"Mostrar na lista de
+    tarefas"** — dá para mudar isso a qualquer momento, editando o item.
+  - Datas depois do ano atual ficam em **"Mais pra frente"**.
 - **Parabéns com confetes**: quando todas as tarefas de um período são concluídas, aparece uma tela
   de parabéns com o panda. A imagem pode ser **compartilhada** em outros apps.
-- **Não realizadas a tempo**: tarefas não concluídas até o fim do período vão para essa seção.
+- **Não realizadas a tempo**: tarefas não concluídas até o fim do prazo vão para essa seção.
 - **Em pausa**: tarefas podem ser pausadas.
-- **Arrastar e soltar**: segure uma tarefa (toque longo) e solte em outra fileira. Durante o arraste
-  aparece uma barra na parte de baixo com todos os destinos (Dia, Semana, Mês, Trimestre, Semestre,
-  Ano e Pausar), então não é preciso rolar a tela. Soltar uma tarefa pausada ou atrasada numa fileira
-  a retoma naquele período. O menu `⋮` de cada tarefa tem as mesmas opções.
-- **Agenda**: calendário com compromissos (data, hora e observação). O calendário também mostra o
-  prazo final das tarefas.
+- **Arrastar e soltar**: arraste pelo **⠿** (na hora) ou **segure** a tarefa. Um painel com todos os
+  destinos aparece no topo (Dia, Semana, Mês, Trimestre, Semestre, Ano e Pausar) e a lista **rola
+  sozinha** quando o dedo chega perto da borda. Soltar uma tarefa pausada ou atrasada numa fileira a
+  retoma naquele período. O menu `⋮` de cada tarefa tem as mesmas opções.
+
+## Atualização sem perder dados
+
+Os dados ficam no celular. Para quem já tem uma versão instalada, basta instalar o APK novo por cima:
+o app mantém tudo, e os compromissos da v1 são convertidos automaticamente. Para isso funcionar,
+todo APK precisa ser **assinado com a mesma chave** e ter um `version` maior no `pubspec.yaml`.
 
 ## Como rodar
 

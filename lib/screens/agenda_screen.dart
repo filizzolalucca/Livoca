@@ -3,11 +3,15 @@ import 'package:intl/intl.dart';
 import 'package:table_calendar/table_calendar.dart';
 
 import '../app_scope.dart';
+import '../app_state.dart';
 import '../models.dart';
 import '../theme.dart';
 import '../widgets/panda.dart';
 import '../widgets/task_widgets.dart';
+import 'celebration_screen.dart';
 
+/// Agenda: mostra os itens com dia marcado e as tarefas que ocupam um
+/// período inteiro (barra contínua embaixo dos dias do período).
 class AgendaScreen extends StatefulWidget {
   const AgendaScreen({super.key});
 
@@ -20,11 +24,24 @@ class _AgendaScreenState extends State<AgendaScreen> {
   DateTime _selected = DateTime.now();
   CalendarFormat _format = CalendarFormat.month;
 
+  Future<void> _toggle(AppState state, Task task) async {
+    final period = await state.toggleDone(task);
+    if (period != null && mounted) {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => CelebrationScreen(period: period, name: state.profile?.name ?? ''),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = AppScope.of(context);
-    final appointments = state.appointmentsOn(_selected);
-    final dueTasks = state.tasksDueOn(_selected);
+    final day = DateTime(_selected.year, _selected.month, _selected.day);
+    final items = state.itemsOn(day);
+    final spanning = state.spanningOn(day);
+    final now = DateTime.now();
 
     return Scaffold(
       body: ListView(
@@ -33,7 +50,7 @@ class _AgendaScreenState extends State<AgendaScreen> {
           Container(
             decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(24)),
             padding: const EdgeInsets.only(bottom: 8),
-            child: TableCalendar<Object>(
+            child: TableCalendar<Task>(
               locale: 'pt_BR',
               firstDay: DateTime(2000),
               lastDay: DateTime(2100, 12, 31),
@@ -46,13 +63,17 @@ class _AgendaScreenState extends State<AgendaScreen> {
               },
               startingDayOfWeek: StartingDayOfWeek.monday,
               selectedDayPredicate: (d) => isSameDay(d, _selected),
-              eventLoader: (day) => [...state.appointmentsOn(day), ...state.tasksDueOn(day)],
+              eventLoader: state.itemsOn,
               onDaySelected: (selected, focused) => setState(() {
                 _selected = selected;
                 _focused = focused;
               }),
               onFormatChanged: (f) => setState(() => _format = f),
               onPageChanged: (focused) => _focused = focused,
+              calendarBuilders: CalendarBuilders<Task>(
+                markerBuilder: (context, d, events) =>
+                    _DayMarkers(dots: events.length, span: state.hasSpanOn(d)),
+              ),
               headerStyle: HeaderStyle(
                 titleCentered: true,
                 // O botão mostra o formato atual (o padrão da biblioteca mostra o próximo).
@@ -82,18 +103,15 @@ class _AgendaScreenState extends State<AgendaScreen> {
                   fontWeight: FontWeight.w800,
                 ),
                 selectedDecoration: BoxDecoration(color: LivocaColors.pink, shape: BoxShape.circle),
-                markerDecoration: BoxDecoration(
-                  color: LivocaColors.pinkDark,
-                  shape: BoxShape.circle,
-                ),
-                markersMaxCount: 3,
                 weekendTextStyle: TextStyle(color: LivocaColors.pink),
               ),
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 8),
+          const _Legend(),
+          const SizedBox(height: 12),
           Text(
-            capitalize(DateFormat("EEEE, d 'de' MMMM").format(_selected)),
+            capitalize(DateFormat("EEEE, d 'de' MMMM").format(day)),
             style: const TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.w800,
@@ -101,47 +119,44 @@ class _AgendaScreenState extends State<AgendaScreen> {
             ),
           ),
           const SizedBox(height: 8),
-          if (appointments.isEmpty && dueTasks.isEmpty)
+          if (items.isEmpty && spanning.isEmpty)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 24),
               child: Column(
                 children: [
                   const Opacity(opacity: 0.7, child: Panda(size: 90)),
                   const SizedBox(height: 8),
-                  Text(
-                    'Nenhum compromisso neste dia.',
-                    style: TextStyle(color: Colors.grey.shade600),
-                  ),
+                  Text('Nada marcado neste dia.', style: TextStyle(color: Colors.grey.shade600)),
                 ],
               ),
             ),
-          for (final a in appointments)
+          for (final t in items)
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
-              child: _AppointmentTile(appointment: a),
+              child: _AgendaTile(
+                task: t,
+                badge: t.timeMinutes == null ? 'Dia todo' : timeLabel(t.timeMinutes!),
+                subtitle: t.isTask ? (t.note.isEmpty ? null : t.note) : _onlyAgenda(t),
+                overdue: t.isOverdue(now),
+                onToggle: () => _toggle(state, t),
+              ),
             ),
-          if (dueTasks.isNotEmpty) ...[
+          if (spanning.isNotEmpty) ...[
             const SizedBox(height: 8),
             Text(
-              'Prazo final de tarefas',
+              'Ocupando o período',
               style: TextStyle(fontWeight: FontWeight.w700, color: Colors.grey.shade700),
             ),
             const SizedBox(height: 6),
-            for (final t in dueTasks)
+            for (final t in spanning)
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
-                child: Card(
-                  child: ListTile(
-                    leading: Icon(
-                      t.isDone ? Icons.check_circle_rounded : t.period.icon,
-                      color: t.isDone ? Colors.green : LivocaColors.pink,
-                    ),
-                    title: Text(
-                      t.title,
-                      style: TextStyle(decoration: t.isDone ? TextDecoration.lineThrough : null),
-                    ),
-                    subtitle: Text('Tarefa • ${t.period.shortLabel}'),
-                  ),
+                child: _AgendaTile(
+                  task: t,
+                  badge: t.period.shortLabel,
+                  subtitle: periodRangeLabel(t.period, t.periodStart),
+                  overdue: t.isOverdue(now),
+                  onToggle: () => _toggle(state, t),
                 ),
               ),
           ],
@@ -149,24 +164,115 @@ class _AgendaScreenState extends State<AgendaScreen> {
       ),
       floatingActionButton: FloatingActionButton.extended(
         heroTag: 'agenda_fab',
-        onPressed: () => showAppointmentEditor(context, initialDay: _selected),
+        onPressed: () => showTaskEditor(context, initialDate: day),
         icon: const Icon(Icons.event_available_rounded),
-        label: const Text('Compromisso', style: TextStyle(fontWeight: FontWeight.w700)),
+        label: const Text('Adicionar', style: TextStyle(fontWeight: FontWeight.w700)),
+      ),
+    );
+  }
+
+  static String _onlyAgenda(Task t) => t.note.isEmpty ? 'Só na agenda' : 'Só na agenda • ${t.note}';
+}
+
+/// Pontinhos para itens do dia e uma barra para tarefas que ocupam o período.
+class _DayMarkers extends StatelessWidget {
+  const _DayMarkers({required this.dots, required this.span});
+
+  final int dots;
+  final bool span;
+
+  @override
+  Widget build(BuildContext context) {
+    if (dots == 0 && !span) return const SizedBox.shrink();
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: 3,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            height: 7,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                for (var i = 0; i < dots.clamp(0, 3); i++)
+                  Container(
+                    width: 6,
+                    height: 6,
+                    margin: const EdgeInsets.symmetric(horizontal: 1),
+                    decoration: const BoxDecoration(
+                      color: LivocaColors.pinkDark,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 2),
+          // Encosta nas bordas da célula para formar uma faixa contínua.
+          Container(height: 4, color: span ? LivocaColors.pinkLight : Colors.transparent),
+        ],
       ),
     );
   }
 }
 
-class _AppointmentTile extends StatelessWidget {
-  const _AppointmentTile({required this.appointment});
-
-  final Appointment appointment;
+class _Legend extends StatelessWidget {
+  const _Legend();
 
   @override
   Widget build(BuildContext context) {
-    final a = appointment;
+    final style = TextStyle(fontSize: 12, color: Colors.grey.shade700);
+    return Wrap(
+      spacing: 16,
+      runSpacing: 4,
+      children: [
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 7,
+              height: 7,
+              decoration: const BoxDecoration(color: LivocaColors.pinkDark, shape: BoxShape.circle),
+            ),
+            const SizedBox(width: 6),
+            Text('Marcado no dia', style: style),
+          ],
+        ),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(width: 18, height: 4, color: LivocaColors.pinkLight),
+            const SizedBox(width: 6),
+            Text('Tarefa do período', style: style),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _AgendaTile extends StatelessWidget {
+  const _AgendaTile({
+    required this.task,
+    required this.badge,
+    required this.subtitle,
+    required this.overdue,
+    required this.onToggle,
+  });
+
+  final Task task;
+  final String badge;
+  final String? subtitle;
+  final bool overdue;
+  final VoidCallback onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = task;
     return Dismissible(
-      key: ValueKey(a.id),
+      key: ValueKey('agenda_${t.id}'),
       direction: DismissDirection.endToStart,
       background: Container(
         alignment: Alignment.centerRight,
@@ -177,217 +283,75 @@ class _AppointmentTile extends StatelessWidget {
         ),
         child: const Icon(Icons.delete_rounded, color: Colors.white),
       ),
-      confirmDismiss: (_) => showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Excluir compromisso?'),
-          content: Text('"${a.title}" será excluído.'),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Excluir')),
-          ],
-        ),
-      ),
-      onDismissed: (_) => AppScope.read(context).deleteAppointment(a),
+      confirmDismiss: (_) => confirmDelete(context, t),
+      onDismissed: (_) => AppScope.read(context).deleteTask(t),
       child: Card(
-        child: ListTile(
-          onTap: () => showAppointmentEditor(context, appointment: a),
-          leading: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-            decoration: BoxDecoration(
-              color: LivocaColors.pinkLight,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Text(
-              DateFormat('HH:mm').format(a.dateTime),
-              style: const TextStyle(fontWeight: FontWeight.w800, color: LivocaColors.pinkDark),
-            ),
-          ),
-          title: Text(a.title, style: const TextStyle(fontWeight: FontWeight.w700)),
-          subtitle: a.note.isEmpty ? null : Text(a.note),
-          trailing: const Icon(Icons.chevron_right_rounded, color: LivocaColors.pinkLight),
-        ),
-      ),
-    );
-  }
-}
-
-/// Criar (appointment == null) ou editar um compromisso.
-Future<void> showAppointmentEditor(
-  BuildContext context, {
-  Appointment? appointment,
-  DateTime? initialDay,
-}) {
-  return showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    showDragHandle: true,
-    backgroundColor: Colors.white,
-    builder: (_) => _AppointmentEditor(appointment: appointment, initialDay: initialDay),
-  );
-}
-
-class _AppointmentEditor extends StatefulWidget {
-  const _AppointmentEditor({this.appointment, this.initialDay});
-
-  final Appointment? appointment;
-  final DateTime? initialDay;
-
-  @override
-  State<_AppointmentEditor> createState() => _AppointmentEditorState();
-}
-
-class _AppointmentEditorState extends State<_AppointmentEditor> {
-  late final _title = TextEditingController(text: widget.appointment?.title ?? '');
-  late final _note = TextEditingController(text: widget.appointment?.note ?? '');
-  late DateTime _date;
-  late TimeOfDay _time;
-  String? _error;
-
-  @override
-  void initState() {
-    super.initState();
-    final base = widget.appointment?.dateTime;
-    if (base != null) {
-      _date = DateTime(base.year, base.month, base.day);
-      _time = TimeOfDay.fromDateTime(base);
-    } else {
-      final d = widget.initialDay ?? DateTime.now();
-      _date = DateTime(d.year, d.month, d.day);
-      _time = const TimeOfDay(hour: 9, minute: 0);
-    }
-  }
-
-  @override
-  void dispose() {
-    _title.dispose();
-    _note.dispose();
-    super.dispose();
-  }
-
-  Future<void> _pickDate() async {
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: _date,
-      firstDate: DateTime(2000),
-      lastDate: DateTime(2100, 12, 31),
-    );
-    if (picked != null) setState(() => _date = picked);
-  }
-
-  Future<void> _pickTime() async {
-    final picked = await showTimePicker(context: context, initialTime: _time);
-    if (picked != null) setState(() => _time = picked);
-  }
-
-  Future<void> _save() async {
-    if (_title.text.trim().isEmpty) {
-      setState(() => _error = 'Escreva o nome do compromisso');
-      return;
-    }
-    final state = AppScope.read(context);
-    final dt = DateTime(_date.year, _date.month, _date.day, _time.hour, _time.minute);
-    final a = widget.appointment;
-    if (a == null) {
-      await state.addAppointment(_title.text, dt, _note.text);
-    } else {
-      await state.updateAppointment(a, _title.text, dt, _note.text);
-    }
-    if (mounted) Navigator.pop(context);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final editing = widget.appointment != null;
-    return Padding(
-      padding: EdgeInsets.fromLTRB(20, 0, 20, MediaQuery.viewInsetsOf(context).bottom + 20),
-      child: SafeArea(
-        top: false,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                editing ? 'Editar compromisso' : 'Novo compromisso',
-                style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w800,
-                  color: LivocaColors.pinkDark,
-                ),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: _title,
-                autofocus: !editing,
-                maxLength: 80,
-                textCapitalization: TextCapitalization.sentences,
-                decoration: InputDecoration(
-                  labelText: 'Compromisso',
-                  errorText: _error,
-                  counterText: '',
-                ),
-                onChanged: (_) {
-                  if (_error != null) setState(() => _error = null);
-                },
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: _PickerButton(
-                      icon: Icons.calendar_today_rounded,
-                      label: DateFormat('dd/MM/yyyy').format(_date),
-                      onTap: _pickDate,
+        color: overdue ? const Color(0xFFFFEBEE) : Colors.white,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(18),
+          onTap: () => showTaskEditor(context, task: t),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
+            child: Row(
+              children: [
+                Container(
+                  constraints: const BoxConstraints(minWidth: 64),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: t.isTask ? LivocaColors.pinkLight : const Color(0xFFE1BEE7),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    badge,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                      color: LivocaColors.pinkDark,
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: _PickerButton(
-                      icon: Icons.access_time_rounded,
-                      label: _time.format(context),
-                      onTap: _pickTime,
-                    ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        t.title,
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          decoration: t.isDone ? TextDecoration.lineThrough : null,
+                          color: t.isDone ? Colors.grey : Colors.black87,
+                        ),
+                      ),
+                      if (subtitle != null)
+                        Text(
+                          subtitle!,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+                        ),
+                    ],
                   ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _note,
-                maxLines: 3,
-                minLines: 1,
-                textCapitalization: TextCapitalization.sentences,
-                decoration: const InputDecoration(labelText: 'Observação (opcional)'),
-              ),
-              const SizedBox(height: 20),
-              FilledButton(onPressed: _save, child: Text(editing ? 'Salvar' : 'Adicionar')),
-            ],
+                ),
+                if (t.isTask)
+                  Checkbox(
+                    value: t.isDone,
+                    activeColor: LivocaColors.pink,
+                    side: const BorderSide(color: LivocaColors.pink, width: 2),
+                    onChanged: (_) => onToggle(),
+                  )
+                else
+                  const Padding(
+                    padding: EdgeInsets.all(12),
+                    child: Icon(Icons.chevron_right_rounded, color: LivocaColors.pinkLight),
+                  ),
+              ],
+            ),
           ),
         ),
       ),
-    );
-  }
-}
-
-class _PickerButton extends StatelessWidget {
-  const _PickerButton({required this.icon, required this.label, required this.onTap});
-
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return OutlinedButton.icon(
-      style: OutlinedButton.styleFrom(
-        foregroundColor: LivocaColors.pinkDark,
-        side: const BorderSide(color: LivocaColors.pinkLight, width: 1.5),
-        padding: const EdgeInsets.symmetric(vertical: 14),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      ),
-      onPressed: onTap,
-      icon: Icon(icon, size: 18),
-      label: Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
     );
   }
 }

@@ -39,7 +39,8 @@ class _DailyBriefingScreenState extends State<DailyBriefingScreen> {
     final state = AppScope.of(context);
     final now = DateTime.now();
     final today = state.currentTasks(PeriodType.daily);
-    final appointments = state.appointmentsOn(now);
+    // Compromissos que são só da agenda (os que também são tarefas já estão em "today").
+    final appointments = state.itemsOn(now).where((t) => !t.isTask).toList();
     final overdue = state.overdueTasks;
     final hasOverdue = overdue.isNotEmpty;
     final name = state.profile?.name ?? '';
@@ -64,7 +65,7 @@ class _DailyBriefingScreenState extends State<DailyBriefingScreen> {
               _Item(
                 icon: t.isDone ? Icons.check_circle_rounded : Icons.radio_button_unchecked_rounded,
                 iconColor: t.isDone ? Colors.green : LivocaColors.pink,
-                text: t.title,
+                text: t.timeMinutes == null ? t.title : '${timeLabel(t.timeMinutes!)} • ${t.title}',
                 done: t.isDone,
               ),
           if (appointments.isNotEmpty) ...[
@@ -78,7 +79,7 @@ class _DailyBriefingScreenState extends State<DailyBriefingScreen> {
               _Item(
                 icon: Icons.event_rounded,
                 iconColor: LivocaColors.pinkDark,
-                text: '${DateFormat('HH:mm').format(a.dateTime)} • ${a.title}',
+                text: a.timeMinutes == null ? a.title : '${timeLabel(a.timeMinutes!)} • ${a.title}',
               ),
           ],
         ],
