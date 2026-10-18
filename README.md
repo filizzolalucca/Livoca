@@ -14,6 +14,16 @@
   <img src="https://img.shields.io/badge/platforms-Android%20%7C%20iOS-lightgrey" alt="Platforms">
 </p>
 
+<p align="center">
+  <img src="docs/screenshots/daily-briefing.jpg" alt="Daily briefing" width="200">
+  &nbsp;
+  <img src="docs/screenshots/tasks.jpg" alt="Tasks by period" width="200">
+  &nbsp;
+  <img src="docs/screenshots/calendar.jpg" alt="Calendar" width="200">
+  &nbsp;
+  <img src="docs/screenshots/celebration.jpg" alt="Celebration screen" width="200">
+</p>
+
 > The app's interface is in Brazilian Portuguese.
 
 ## Features
